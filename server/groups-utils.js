@@ -38,3 +38,10 @@ export function joinedGroup(entity) {
       (entity.className === "Channel" && entity.megagroup)),
   );
 }
+
+export function dialogOptions({ limit = 100, offset_date } = {}) {
+  return {
+    limit,
+    ...(offset_date ? { offsetDate: offset_date, ignorePinned: true } : {}),
+  };
+}

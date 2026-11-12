@@ -77,3 +77,14 @@ test("Telegram external-photo and group peers serialize without sending", () => 
     }).getBytes().length,
   );
 });
+
+test("initial dialog discovery omits the date filter rather than filtering everything after epoch", async () => {
+  const { dialogOptions } = await import("./groups-utils.js");
+  assert.deepEqual(dialogOptions({ limit: 500 }), { limit: 500 });
+  assert.equal("offsetDate" in dialogOptions({ limit: 500 }), false);
+  assert.deepEqual(dialogOptions({ limit: 100, offset_date: 1700000000 }), {
+    limit: 100,
+    offsetDate: 1700000000,
+    ignorePinned: true,
+  });
+});

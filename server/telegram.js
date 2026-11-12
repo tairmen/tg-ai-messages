@@ -1,4 +1,8 @@
-import { joinedGroup, validatePublicImageUrl } from "./groups-utils.js";
+import {
+  joinedGroup,
+  validatePublicImageUrl,
+  dialogOptions,
+} from "./groups-utils.js";
 import { normalizeUsername, importedUser } from "./recipients.js";
 import { telegramMessageContent } from "./message-content.js";
 import "dotenv/config";
@@ -336,11 +340,9 @@ export async function listGroups({
     throw Object.assign(new Error("Connect Telegram first"), {
       httpStatus: 409,
     });
-  const dialogs = await client.getDialogs({
-    limit,
-    offsetDate: offset_date || 0,
-    ignorePinned: Boolean(offset_date),
-  });
+  const dialogs = await client.getDialogs(
+    dialogOptions({ limit, offset_date }),
+  );
   const groups = [];
   for (const dialog of dialogs) {
     const e = dialog.entity;
@@ -424,15 +426,13 @@ export async function groupHistory(
   return {
     group_id: group.id,
     title: group.title,
-    messages: [...batch]
-      .reverse()
-      .map((m) => ({
-        message_id: String(m.id),
-        direction: m.out ? "out" : "in",
-        sender_id: m.senderId ? String(m.senderId) : null,
-        ...telegramMessageContent(m),
-        created_at: new Date(m.date * 1000).toISOString(),
-      })),
+    messages: [...batch].reverse().map((m) => ({
+      message_id: String(m.id),
+      direction: m.out ? "out" : "in",
+      sender_id: m.senderId ? String(m.senderId) : null,
+      ...telegramMessageContent(m),
+      created_at: new Date(m.date * 1000).toISOString(),
+    })),
     next_before_message_id: batch.length
       ? Math.min(...batch.map((m) => m.id))
       : null,
