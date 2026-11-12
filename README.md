@@ -13,6 +13,8 @@ npm run dev
 
 Open http://127.0.0.1:5173. For a production build on this computer: `npm run build` then `npm start`, and open http://127.0.0.1:3001.
 
+If a login code does not arrive, use `npm run telegram:login -- --qr`. In the official Telegram mobile app for the account you want to connect, open Settings > Devices > Link Desktop Device and scan the terminal QR. A two-step password may still be required. QR tokens stay in your terminal and must be kept private. The phone-code flow reports the delivery method Telegram selected (app, SMS, or call).
+
 ## Environment
 
 Copy `.env.example` to `.env` and populate it locally. Both `api_id`/`api_hash` and `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are supported. PostgreSQL database must already exist; migrations create the configured contacts table and three suffixed tables, without dropping existing data. Use a dedicated table name with at most 40 letters/numbers/underscores. `POSTGRES_SSL=true` enables verified TLS when your database requires it.
