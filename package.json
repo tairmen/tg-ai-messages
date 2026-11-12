@@ -1,0 +1,34 @@
+{
+  "name": "telegram-desk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"node --watch server/index.js\" \"vite --host 127.0.0.1\"",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "db:migrate": "node server/migrate.js",
+    "telegram:login": "node server/login.js",
+    "test": "node --test server/*.test.js"
+  },
+  "dependencies": {
+    "@mantine/core": "^8.3.0",
+    "@mantine/hooks": "^8.3.0",
+    "@tabler/icons-react": "^3.35.0",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "openai": "^6.0.0",
+    "papaparse": "^5.7.1",
+    "pg": "^8.16.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "teleproto": "^1.233.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.0",
+    "prettier": "^3.10.1",
+    "vite": "^7.1.0"
+  }
+}
