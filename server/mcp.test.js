@@ -251,3 +251,71 @@ test("SDK token endpoint verifies PKCE before calling provider without a verifie
     await new Promise((resolve) => http.close(resolve));
   }
 });
+
+test("OAuth discovery works at both root and resource-specific URLs on the canonical HTTPS origin", async () => {
+  const { default: express } = await import("express");
+  const { installMcp } = await import("./mcp.js");
+  const app = express();
+  app.use(express.json());
+  installMcp(app, {
+    pool: { query: async () => ({ rows: [] }) },
+    names: { oauth: "unused" },
+    api: async () => ({}),
+    origin: "https://relay.example",
+    legacyOrigin: "https://relay.example:8443",
+  });
+  const http = await new Promise((resolve) => {
+    const h = app.listen(0, "127.0.0.1", () => resolve(h));
+  });
+  const base = "http://127.0.0.1:" + http.address().port;
+  try {
+    const a = await fetch(base + "/.well-known/oauth-protected-resource");
+    const b = await fetch(base + "/.well-known/oauth-protected-resource/mcp");
+    assert.equal(a.status, 200);
+    assert.equal(b.status, 200);
+    const root = await a.json();
+    const specific = await b.json();
+    assert.equal(root.resource, specific.resource);
+    const metadata = await (
+      await fetch(base + "/.well-known/oauth-authorization-server")
+    ).json();
+    assert.equal(root.authorization_servers[0], metadata.issuer);
+    assert.equal(metadata.token_endpoint, "https://relay.example/token");
+    assert.ok(metadata.code_challenge_methods_supported.includes("S256"));
+    const denied = await fetch(base + "/mcp");
+    assert.equal(denied.status, 401);
+    assert.match(
+      denied.headers.get("www-authenticate"),
+      /https:\/\/relay.example\//,
+    );
+  } finally {
+    await new Promise((resolve) => http.close(resolve));
+  }
+});
+test("canonical and legacy MCP resource tokens remain bound to this service", async () => {
+  const store = memoryStore();
+  const p = createOAuthProvider({
+    store,
+    origin: "https://relay.example",
+    legacyOrigin: "https://relay.example:8443",
+  });
+  for (const resource of [
+    "https://relay.example/mcp",
+    "https://relay.example:8443/mcp",
+  ]) {
+    await store.put(
+      "access",
+      hash(resource),
+      { clientId: "test", scopes: ["relay:read"], resource },
+      100,
+    );
+    assert.equal((await p.verifyAccessToken(resource)).resource.href, resource);
+  }
+  await store.put(
+    "access",
+    hash("foreign"),
+    { clientId: "test", scopes: [], resource: "https://foreign.example/mcp" },
+    100,
+  );
+  await assert.rejects(p.verifyAccessToken("foreign"), /Invalid/);
+});

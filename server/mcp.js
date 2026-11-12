@@ -1,5 +1,8 @@
 import express from "express";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import {
+  mcpAuthRouter,
+  createOAuthMetadata,
+} from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createOAuthProvider } from "./mcp-oauth.js";
@@ -37,15 +40,34 @@ export function createPgOAuthStore(pool, table) {
     },
   };
 }
-export function installMcp(app, { pool, names, api, origin }) {
+export function installMcp(app, { pool, names, api, origin, legacyOrigin }) {
   if (!origin) return;
   const store = createPgOAuthStore(pool, names.oauth);
-  const provider = createOAuthProvider({ store, origin });
+  const provider = createOAuthProvider({ store, origin, legacyOrigin });
   const resource = new URL(origin + "/mcp");
   app.post(
     "/authorize/decision",
     express.urlencoded({ extended: false, limit: "8kb" }),
     (req, res, next) => provider.decide(req, res).catch(next),
+  );
+  app.get("/.well-known/oauth-protected-resource", (req, res) =>
+    res
+      .set("Access-Control-Allow-Origin", "*")
+      .json({
+        resource: resource.href,
+        authorization_servers: [new URL(origin).href],
+        scopes_supported: scopes,
+        resource_name: "Relay Telegram workspace",
+      }),
+  );
+  app.get("/.well-known/oauth-authorization-server/mcp", (req, res) =>
+    res.json(
+      createOAuthMetadata({
+        provider,
+        issuerUrl: new URL(origin),
+        scopesSupported: scopes,
+      }),
+    ),
   );
   app.use(
     mcpAuthRouter({
@@ -59,7 +81,7 @@ export function installMcp(app, { pool, names, api, origin }) {
   );
   const auth = requireBearerAuth({
     verifier: provider,
-    expectedResource: resource,
+    // The verifier accepts only this service’s canonical and legacy resource URLs.
     resourceMetadataUrl: origin + "/.well-known/oauth-protected-resource/mcp",
   });
   app.all("/mcp", auth, async (req, res) => {

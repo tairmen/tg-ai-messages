@@ -1,6 +1,6 @@
 # Relay MCP connection
 
-Server URL: https://true.reserv-app.org:8443/mcp
+Server URL: https://true.reserv-app.org/mcp
 Transport: Streamable HTTP
 Authentication: OAuth (authorization-code flow, S256 PKCE, refresh tokens)
 
@@ -58,3 +58,7 @@ Use list_conversations to find tracked customer chats; get_conversation returns 
 set_contact_preferences accepts ai_enabled, ai_instructions, and/or opted_out. Conversation instructions supplement the global instructions; empty text clears the override. Both the global and conversation switches must be on for automatic replies.
 
 The frontend now has a login page and logout. OAuth authorization redirects to the same login page when needed. Existing OAuth connections remain valid; refresh the tool metadata in ChatGPT to discover the added tools.
+
+## Standard HTTPS MCP discovery
+
+The canonical MCP origin is https://true.reserv-app.org on port 443 (MCP_ORIGIN). The dashboard stays at https://true.reserv-app.org:8443 (PUBLIC_ORIGIN). Include deploy/mcp-443.nginx.conf only in the existing domain’s TLS server block to proxy MCP/OAuth routes. Other website paths remain on their existing application. Both root and /mcp-specific protected-resource discovery URLs are published. Existing port-8443 token audiences remain accepted only for this service. OAuth browser login redirects to the dashboard origin when needed; its cookie is shared on the same host.

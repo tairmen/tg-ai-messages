@@ -34,3 +34,7 @@ Runtime secrets: /opt/tg-ai-messages/.env and .data/telegram.session (not in Git
 Create a fresh Telegram session directly on the droplet. Do not run a copied session simultaneously on hosts with different IPs: Telegram can invalidate it with AUTH_KEY_DUPLICATED. Stop tg-ai-messages, run the login command in a temporary interactive container with the application directory mounted read/write as UID 1000, then restart the production container. The production container retains its read-only mount.
 
 The admin login verifier reads .data/admin.htpasswd as UID 1000 with mode 600. Sessions are hashed and persisted in the OAuth storage table with a 24-hour expiry. Nginx strips X-Relay-Internal from all public requests; only the in-process MCP bridge knows that private credential. The public browser cannot bypass login by supplying an admin API token.
+
+## Standard HTTPS MCP discovery
+
+The canonical MCP origin is https://true.reserv-app.org on port 443 (MCP_ORIGIN). The dashboard stays at https://true.reserv-app.org:8443 (PUBLIC_ORIGIN). Include deploy/mcp-443.nginx.conf only in the existing domain’s TLS server block to proxy MCP/OAuth routes. Other website paths remain on their existing application. Both root and /mcp-specific protected-resource discovery URLs are published. Existing port-8443 token audiences remain accepted only for this service. OAuth browser login redirects to the dashboard origin when needed; its cookie is shared on the same host.

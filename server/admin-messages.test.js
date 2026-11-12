@@ -44,7 +44,7 @@ test("admin login uses an HttpOnly session, protects APIs, redirects OAuth, and 
       redirect: "manual",
     });
     assert.equal(authRedirect.status, 302);
-    assert.match(authRedirect.headers.get("location"), /^\/login\?next=/);
+    assert.match(authRedirect.headers.get("location"), /\/login\?next=/);
     assert.equal(
       (
         await fetch(base + "/api/auth/login", {

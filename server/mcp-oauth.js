@@ -6,10 +6,14 @@ import {
   InvalidClientMetadataError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { hash, random, scopes, escapeHtml } from "./mcp-utils.js";
-export function createOAuthProvider({ store, origin }) {
+export function createOAuthProvider({ store, origin, legacyOrigin }) {
   const resource = origin + "/mcp";
+  const allowedResources = new Set([
+    resource,
+    ...(legacyOrigin ? [legacyOrigin + "/mcp"] : []),
+  ]);
   const checkResource = (r) => {
-    if (r && r.toString().replace(/\/$/, "") !== resource)
+    if (r && !allowedResources.has(r.toString().replace(/\/$/, "")))
       throw new InvalidTargetError(
         "Token is restricted to this Relay MCP server",
       );
@@ -72,6 +76,7 @@ export function createOAuthProvider({ store, origin }) {
           codeChallenge: params.codeChallenge,
           state: params.state,
           scopes: requested,
+          resource: params.resource?.toString().replace(/\/$/, "") || resource,
           csrf: hash(csrf),
         },
         300,
@@ -150,7 +155,7 @@ export function createOAuthProvider({ store, origin }) {
         clientId: client.client_id,
         scopes: row.scopes,
         grantId: random(),
-        resource,
+        resource: row.resource || resource,
       });
     },
     async exchangeRefreshToken(client, token, requested, r) {
@@ -166,7 +171,8 @@ export function createOAuthProvider({ store, origin }) {
     },
     async verifyAccessToken(token) {
       const data = await store.get("access", hash(token));
-      if (!data) throw new InvalidTokenError("Invalid or expired access token");
+      if (!data || !allowedResources.has(data.resource?.replace(/\/$/, "")))
+        throw new InvalidTokenError("Invalid or expired access token");
       return {
         token,
         clientId: data.clientId,

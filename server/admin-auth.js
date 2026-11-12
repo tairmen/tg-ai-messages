@@ -104,7 +104,9 @@ export function installAdminAuth(
     if (req.path.startsWith("/authorize") && !req.relayAdmin) {
       if (req.method !== "GET")
         return res.status(401).send("Sign in again and restart authorization.");
-      return res.redirect("/login?next=" + encodeURIComponent(req.originalUrl));
+      return res.redirect(
+        (origin || "") + "/login?next=" + encodeURIComponent(req.originalUrl),
+      );
     }
     next();
   });

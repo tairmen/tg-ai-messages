@@ -37,6 +37,7 @@ app.use((req, res, next) => {
     !publicOAuth &&
     !chatMcp &&
     origin !== process.env.PUBLIC_ORIGIN &&
+    !(origin === process.env.MCP_ORIGIN && req.path.startsWith("/authorize")) &&
     !/^http:\/\/(localhost|127\.0\.0\.1):(3001|5173)$/.test(origin)
   )
     return res.status(403).json({ error: "Origin rejected" });
@@ -52,7 +53,8 @@ installAdminAuth(app, {
 const mcp = installMcp(app, {
   pool,
   names,
-  origin: process.env.PUBLIC_ORIGIN,
+  origin: process.env.MCP_ORIGIN || process.env.PUBLIC_ORIGIN,
+  legacyOrigin: process.env.PUBLIC_ORIGIN,
   api: async (route, method = "GET", body) => {
     const response = await fetch("http://127.0.0.1:3001/api" + route, {
       method,
@@ -78,9 +80,10 @@ app.get("/api/health", (req, res) =>
     telegram: status(),
     openai: Boolean(process.env.OPENAI_API_KEY),
     token,
-    mcp_url: process.env.PUBLIC_ORIGIN
-      ? process.env.PUBLIC_ORIGIN + "/mcp"
-      : null,
+    mcp_url:
+      process.env.MCP_ORIGIN || process.env.PUBLIC_ORIGIN
+        ? (process.env.MCP_ORIGIN || process.env.PUBLIC_ORIGIN) + "/mcp"
+        : null,
   }),
 );
 app.use("/api", (req, res, next) => {
