@@ -210,3 +210,44 @@ test("campaign preview hash changes with text, recipient identity, and opt-out s
   );
   assert.throws(() => previewCampaign(campaign, []), /no longer exists/);
 });
+
+// Exercise the real SDK token endpoint, not just the provider methods.
+test("SDK token endpoint verifies PKCE before calling provider without a verifier", async () => {
+  const { default: express } = await import("express");
+  const { mcpAuthRouter } =
+    await import("@modelcontextprotocol/sdk/server/auth/router.js");
+  const { provider, client, verifier, code } = await grant();
+  const app = express();
+  app.use(
+    mcpAuthRouter({ provider, issuerUrl: new URL("https://relay.example") }),
+  );
+  const http = await new Promise((resolve) => {
+    const h = app.listen(0, "127.0.0.1", () => resolve(h));
+  });
+  try {
+    const request = (v) =>
+      fetch("http://127.0.0.1:" + http.address().port + "/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: client.client_id,
+          redirect_uri: client.redirect_uris[0],
+          code,
+          code_verifier: v,
+          resource: "https://relay.example/mcp",
+        }),
+      });
+    assert.equal((await request("incorrect-pkce-verifier")).status, 400);
+    const response = await request(verifier);
+    const tokens = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(tokens));
+    assert.ok(
+      (await provider.verifyAccessToken(tokens.access_token)).scopes.includes(
+        "relay:read",
+      ),
+    );
+  } finally {
+    await new Promise((resolve) => http.close(resolve));
+  }
+});

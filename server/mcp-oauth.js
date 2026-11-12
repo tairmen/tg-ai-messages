@@ -136,8 +136,10 @@ export function createOAuthProvider({ store, origin }) {
       const row = await getCode(client, code);
       if (redirectUri !== row.redirectUri)
         throw new InvalidGrantError("Redirect URL mismatch");
+      // The SDK verifies PKCE itself and then omits the verifier.
+      // If a caller supplies it directly, validate it here as well.
       if (
-        !verifier ||
+        verifier &&
         hash(verifier) !==
           Buffer.from(row.codeChallenge, "base64url").toString("hex")
       )
