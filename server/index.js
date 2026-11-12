@@ -1,4 +1,6 @@
 import express from "express";
+import { installMcp } from "./mcp.js";
+import { previewCampaign } from "./mcp-utils.js";
 import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,14 +18,44 @@ app.use((req, res, next) => {
   if (!["localhost", "127.0.0.1"].includes(host))
     return res.status(403).json({ error: "Local access only" });
   const origin = req.headers.origin;
+  const publicOAuth = /^\/(?:\.well-known\/|register$|token$|revoke$)/.test(
+    req.path,
+  );
+  const chatMcp =
+    req.path.replace(/\/$/, "") === "/mcp" &&
+    [
+      "https://chatgpt.com",
+      "https://chat.openai.com",
+      "https://claude.ai",
+    ].includes(origin);
   if (
     origin &&
+    !publicOAuth &&
+    !chatMcp &&
     origin !== process.env.PUBLIC_ORIGIN &&
     !/^http:\/\/(localhost|127\.0\.0\.1):(3001|5173)$/.test(origin)
   )
     return res.status(403).json({ error: "Origin rejected" });
   res.setHeader("Cache-Control", "no-store");
   next();
+});
+const mcp = installMcp(app, {
+  pool,
+  names,
+  origin: process.env.PUBLIC_ORIGIN,
+  api: async (route, method = "GET", body) => {
+    const response = await fetch("http://127.0.0.1:3001/api" + route, {
+      method,
+      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const data = await response.json();
+    if (!response.ok)
+      throw Object.assign(new Error("Admin API request failed"), {
+        publicMessage: data.error,
+      });
+    return data;
+  },
 });
 app.get("/api/health", (req, res) =>
   res.json({
@@ -32,6 +64,9 @@ app.get("/api/health", (req, res) =>
     telegram: status(),
     openai: Boolean(process.env.OPENAI_API_KEY),
     token,
+    mcp_url: process.env.PUBLIC_ORIGIN
+      ? process.env.PUBLIC_ORIGIN + "/mcp"
+      : null,
   }),
 );
 app.use("/api", (req, res, next) => {
@@ -42,6 +77,13 @@ app.use("/api", (req, res, next) => {
   if (!dbReady)
     return res.status(503).json({ error: dbError || "Database unavailable" });
   next();
+});
+app.get("/api/mcp/connections", async (req, res) =>
+  res.json((await mcp?.connections()) || []),
+);
+app.delete("/api/mcp/connections/:grant", async (req, res) => {
+  await mcp?.revoke(req.params.grant);
+  res.json({ revoked: true });
 });
 app.get("/api/contacts", async (req, res) =>
   res.json(
@@ -163,16 +205,58 @@ app.post("/api/campaigns", async (req, res) => {
 app.post("/api/campaigns/:id/send", async (req, res) => {
   if (!status().connected)
     return res.status(409).json({ error: "Connect Telegram first" });
-  const r = await pool.query(
-    `UPDATE ${names.campaigns} SET status='sending' WHERE id=$1 AND status='draft' RETURNING *`,
-    [id(req.params.id)],
-  );
-  if (!r.rowCount)
-    return res
-      .status(409)
-      .json({ error: "Campaign is already sent, sending, or unavailable" });
-  const campaign = r.rows[0],
-    results = [];
+  const db = await pool.connect();
+  let campaign, snapshot;
+  try {
+    await db.query("BEGIN");
+    campaign = (
+      await db.query(
+        `SELECT * FROM ${names.campaigns} WHERE id=$1 FOR UPDATE`,
+        [id(req.params.id)],
+      )
+    ).rows[0];
+    if (!campaign || campaign.status !== "draft") {
+      await db.query("ROLLBACK");
+      return res
+        .status(409)
+        .json({ error: "Campaign is already sent, sending, or unavailable" });
+    }
+    snapshot = (
+      await db.query(
+        `SELECT * FROM ${names.contacts} WHERE id=ANY($1::int[]) ORDER BY id FOR SHARE`,
+        [campaign.recipient_ids],
+      )
+    ).rows;
+    const preview = previewCampaign(campaign, snapshot);
+    if (
+      req.body?.preview_hash &&
+      req.body.preview_hash !== preview.preview_hash
+    ) {
+      await db.query("ROLLBACK");
+      return res.status(409).json({
+        error:
+          "Campaign preview changed. Preview it again and ask the user before sending.",
+      });
+    }
+    if (preview.recipients.some((c) => c.opted_out)) {
+      await db.query("ROLLBACK");
+      return res.status(409).json({
+        error:
+          "A selected contact has opted out. Create a draft with active contacts.",
+      });
+    }
+    await db.query(
+      `UPDATE ${names.campaigns} SET status='sending' WHERE id=$1`,
+      [campaign.id],
+    );
+    await db.query("COMMIT");
+  } catch (e) {
+    await db.query("ROLLBACK");
+    throw e;
+  } finally {
+    db.release();
+  }
+  const results = [];
   let halted = false;
   for (const contactId of campaign.recipient_ids) {
     if (halted) {
@@ -185,6 +269,8 @@ app.post("/api/campaigns/:id/send", async (req, res) => {
     }
     try {
       const c = await contact(contactId);
+      const original = snapshot.find((row) => row.id === contactId);
+      c.name = original.name;
       await send(c, campaign.body.replaceAll("{{name}}", c.name), "campaign");
       results.push({ contact_id: contactId, status: "sent" });
     } catch (e) {

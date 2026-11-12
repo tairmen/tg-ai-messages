@@ -49,6 +49,7 @@ function App() {
     [contacts, setContacts] = useState([]),
     [campaigns, setCampaigns] = useState([]),
     [config, setConfig] = useState(null),
+    [mcpConnections, setMcpConnections] = useState([]),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [pending, setPending] = useState(false),
@@ -69,11 +70,13 @@ function App() {
     csrf = h.token;
     setHealth(h);
     if (h.database) {
-      const [c, k, s] = await Promise.all([
+      const [c, k, s, connections] = await Promise.all([
         api("/contacts"),
         api("/campaigns"),
         api("/settings"),
+        api("/mcp/connections"),
       ]);
+      setMcpConnections(connections);
       setContacts(c);
       setCampaigns(k);
       setConfig((prev) => prev || s);
@@ -1083,6 +1086,57 @@ function App() {
                     </Badge>
                   </div>
                 ))}
+                {health?.mcp_url && (
+                  <div className="login-help">
+                    <h3>Chat with Relay through MCP</h3>
+                    <p>
+                      Add this server in your AI client and choose OAuth. Sign
+                      in with your dashboard admin account and approve the
+                      connection.
+                    </p>
+                    <TextInput
+                      aria-label="MCP server URL"
+                      value={health.mcp_url}
+                      readOnly
+                    />
+                    <p>
+                      Draft and preview campaigns in chat. Sending stays a
+                      separate step.
+                    </p>
+                    <h3>Authorized connections</h3>
+                    {mcpConnections.length ? (
+                      mcpConnections.map((c) => (
+                        <div className="connection" key={c.grant_id}>
+                          <div>
+                            <strong>MCP client</strong>
+                            <small>{c.client_id.slice(0, 16)}…</small>
+                          </div>
+                          <Button
+                            size="xs"
+                            variant="light"
+                            color="red"
+                            loading={pending}
+                            onClick={() =>
+                              action(
+                                () =>
+                                  api(
+                                    "/mcp/connections/" +
+                                      encodeURIComponent(c.grant_id),
+                                    "DELETE",
+                                  ),
+                                "MCP connection revoked",
+                              )
+                            }
+                          >
+                            Revoke
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p>No clients connected yet.</p>
+                    )}
+                  </div>
+                )}
                 <div className="login-help">
                   <h3>Connect your Telegram account</h3>
                   <p>Open a terminal in the project folder and run:</p>
@@ -1106,8 +1160,9 @@ function App() {
                   </Button>
                 </div>
                 <p className="muted footnote">
-                  This dashboard accepts local connections only. Credentials and
-                  the Telegram session stay on this computer.
+                  Credentials and the Telegram session stay on the service host.
+                  Remote dashboard access requires the admin login; MCP clients
+                  use scoped OAuth connections.
                 </p>
               </div>
             </>

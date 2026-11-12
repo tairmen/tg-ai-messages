@@ -6,10 +6,9 @@ if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table) || table.length > 40)
     "POSTGRES_TABLE must be a simple SQL identifier, at most 40 characters",
   );
 export const names = Object.fromEntries(
-  ["contacts", "messages", "campaigns", "settings"].map((k) => [
-    k,
-    `"${k === "contacts" ? table : table + "_" + k}"`,
-  ]),
+  ["contacts", "messages", "campaigns", "settings", "oauth", "audit"].map(
+    (k) => [k, `"${k === "contacts" ? table : table + "_" + k}"`],
+  ),
 );
 export const configured = Boolean(
   process.env.POSTGRES_HOST &&
@@ -51,6 +50,12 @@ export async function migrate() {
         "You are a helpful customer support assistant. Reply in the customer’s language. Be concise. Never invent prices, policies, or promises. Ask a human to help when unsure.",
         "gpt-4.1-mini",
       ],
+    );
+    await c.query(
+      `CREATE TABLE IF NOT EXISTS ${names.oauth} (kind TEXT NOT NULL,key TEXT NOT NULL,value JSONB NOT NULL,expires_at TIMESTAMPTZ NOT NULL,PRIMARY KEY(kind,key))`,
+    );
+    await c.query(
+      `CREATE TABLE IF NOT EXISTS ${names.audit} (id BIGSERIAL PRIMARY KEY,client_id TEXT NOT NULL,tool TEXT NOT NULL,outcome TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
     );
     await c.query("COMMIT");
   } catch (e) {
