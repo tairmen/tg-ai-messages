@@ -81,7 +81,7 @@ export function createOAuthProvider({ store, origin, legacyOrigin }) {
         },
         300,
       );
-      res.cookie("relay_mcp_consent", csrf, {
+      res.cookie("relay_mcp_consent_" + id, csrf, {
         httpOnly: true,
         secure: true,
         sameSite: "lax",
@@ -91,8 +91,7 @@ export function createOAuthProvider({ store, origin, legacyOrigin }) {
       const callback = new URL(params.redirectUri);
       res.set({
         "Cache-Control": "no-store",
-        "Content-Security-Policy":
-          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callback.origin}; frame-ancestors 'none'; base-uri 'none'`,
       });
       res
         .type("html")
@@ -105,18 +104,55 @@ export function createOAuthProvider({ store, origin, legacyOrigin }) {
         return res.status(403).send("Admin login required");
       const id = req.body?.request_id,
         csrf = req.body?.csrf;
+      if (typeof id !== "string" || typeof csrf !== "string")
+        return res
+          .status(400)
+          .send(
+            "This page must be opened from your ChatGPT connection setup. Restart the connection there.",
+          );
+      const completion = async (data) =>
+        res
+          .status(200)
+          .type("html")
+          .send(
+            '<!doctype html><html lang="en"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relay connection</title><body style="font:18px system-ui;max-width:550px;margin:12vh auto;padding:24px"><h1>Connection ' +
+              (data.decision === "approve" ? "approved" : "cancelled") +
+              "</h1><p>This approval form was already submitted. Return to ChatGPT to finish setup. If ChatGPT did not finish connecting, restart the connection from ChatGPT.</p></body></html>",
+          );
+      const pending = await store.get("consent", hash(id));
+      if (!pending) {
+        const done = await store.get("consent_done", hash(id));
+        if (done?.csrf === hash(csrf)) return completion(done);
+        return res
+          .status(403)
+          .send(
+            "This approval page expired. Restart the connection from ChatGPT.",
+          );
+      }
+      const cookieName = "relay_mcp_consent_" + id;
       const cookie = (req.headers.cookie || "")
         .split(";")
         .map((v) => v.trim())
-        .find((v) => v.startsWith("relay_mcp_consent="))
-        ?.slice("relay_mcp_consent=".length);
-      if (typeof id !== "string" || typeof csrf !== "string" || cookie !== csrf)
-        return res.status(403).send("Invalid consent request");
-      const pending = await store.get("consent", hash(id));
-      if (!pending || pending.csrf !== hash(csrf))
-        return res.status(403).send("Consent expired or invalid");
+        .find((v) => v.startsWith(cookieName + "="))
+        ?.slice(cookieName.length + 1);
+      if (cookie !== csrf || pending.csrf !== hash(csrf))
+        return res
+          .status(403)
+          .send(
+            "This approval page is no longer valid. Restart the connection from ChatGPT and use the latest approval page.",
+          );
       const data = await store.take("consent", hash(id));
-      if (!data) return res.status(403).send("Consent already used");
+      if (!data) return completion({ decision: req.body.decision });
+      await store.put(
+        "consent_done",
+        hash(id),
+        {
+          csrf: hash(csrf),
+          decision: req.body.decision,
+          clientId: pending.clientId,
+        },
+        300,
+      );
       const target = new URL(data.redirectUri);
       if (data.state) target.searchParams.set("state", data.state);
       if (req.body.decision === "approve") {
@@ -125,7 +161,7 @@ export function createOAuthProvider({ store, origin, legacyOrigin }) {
         await store.put("code", hash(code), data, 300);
         target.searchParams.set("code", code);
       } else target.searchParams.set("error", "access_denied");
-      res.clearCookie("relay_mcp_consent", {
+      res.clearCookie("relay_mcp_consent_" + id, {
         secure: true,
         httpOnly: true,
         sameSite: "lax",

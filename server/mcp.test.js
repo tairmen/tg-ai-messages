@@ -39,8 +39,11 @@ async function grant() {
     locals: { relayAdmin: true },
     cookie(n, v) {
       result.cookie = v;
+      result.cookieName = n;
     },
-    set() {},
+    set(headers) {
+      result.headers = headers;
+    },
     type() {
       return this;
     },
@@ -72,7 +75,7 @@ async function grant() {
   await provider.decide(
     {
       body: { request_id, csrf, decision: "approve" },
-      headers: { cookie: "relay_mcp_consent=" + result.cookie },
+      headers: { cookie: result.cookieName + "=" + result.cookie },
     },
     res,
   );
@@ -81,7 +84,16 @@ async function grant() {
     new URL(result.redirect).searchParams.get("state"),
     "test-state",
   );
-  return { provider, store, client, verifier, code, res };
+  return {
+    provider,
+    store,
+    client,
+    verifier,
+    code,
+    res,
+    consent: { request_id, csrf },
+    result,
+  };
 }
 test("OAuth requires consent, validates PKCE/client/redirect/resource, and prevents code replay", async () => {
   const { provider, client, verifier, code } = await grant();
@@ -318,4 +330,26 @@ test("canonical and legacy MCP resource tokens remain bound to this service", as
     100,
   );
   await assert.rejects(p.verifyAccessToken("foreign"), /Invalid/);
+});
+
+test("consent allows only the registered callback origin and safely handles a repeated submission", async () => {
+  const { provider, consent, result, res, code, store } = await grant();
+  assert.match(
+    result.headers["Content-Security-Policy"],
+    /form-action 'self' https:\/\/chatgpt.com;/,
+  );
+  assert.match(result.cookieName, /^relay_mcp_consent_[A-Za-z0-9_-]+$/);
+  assert.doesNotMatch(
+    result.headers["Content-Security-Policy"],
+    /form-action[^;]*\*/,
+  );
+  await provider.decide(
+    { body: { ...consent, decision: "approve" }, headers: {} },
+    res,
+  );
+  assert.equal(result.status, 200);
+  assert.match(result.html, /already submitted/);
+  assert.equal((await store.get("code", hash(code))) !== undefined, true);
+  const oldCode = new URL(result.redirect).searchParams.get("code");
+  assert.equal(oldCode, code);
 });
