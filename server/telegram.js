@@ -1,3 +1,4 @@
+import { joinedGroup, validatePublicImageUrl } from "./groups-utils.js";
 import { normalizeUsername, importedUser } from "./recipients.js";
 import { telegramMessageContent } from "./message-content.js";
 import "dotenv/config";
@@ -324,4 +325,117 @@ export async function resolveUsername(value) {
   } finally {
     db.release();
   }
+}
+
+export async function listGroups({
+  limit = 100,
+  offset_date,
+  search = "",
+} = {}) {
+  if (!account)
+    throw Object.assign(new Error("Connect Telegram first"), {
+      httpStatus: 409,
+    });
+  const dialogs = await client.getDialogs({
+    limit,
+    offsetDate: offset_date || 0,
+    ignorePinned: Boolean(offset_date),
+  });
+  const groups = [];
+  for (const dialog of dialogs) {
+    const e = dialog.entity;
+    if (!dialog.isGroup || !joinedGroup(e)) continue;
+    const type = e instanceof Api.Chat ? "chat" : "channel";
+    const row = (
+      await pool.query(
+        `INSERT INTO ${names.groups}(telegram_id,peer_type,access_hash,title,username) VALUES($1,$2,$3,$4,$5) ON CONFLICT(peer_type,telegram_id) DO UPDATE SET access_hash=EXCLUDED.access_hash,title=EXCLUDED.title,username=EXCLUDED.username,updated_at=now() RETURNING id,title,username,peer_type`,
+        [
+          String(e.id),
+          type,
+          e.accessHash ? String(e.accessHash) : null,
+          e.title,
+          e.username || null,
+        ],
+      )
+    ).rows[0];
+    if (
+      !search ||
+      row.title
+        .normalize("NFKC")
+        .toLowerCase()
+        .includes(search.normalize("NFKC").toLowerCase())
+    )
+      groups.push(row);
+  }
+  return {
+    groups,
+    dialogs_scanned: dialogs.length,
+    may_have_more: dialogs.length === limit,
+    next_offset_date: dialogs.length ? dialogs[dialogs.length - 1].date : null,
+  };
+}
+async function groupPeer(group) {
+  if (!account)
+    throw Object.assign(new Error("Connect Telegram first"), {
+      httpStatus: 409,
+    });
+  const peer =
+    group.peer_type === "chat"
+      ? new Api.InputPeerChat({ chatId: BigInt(group.telegram_id) })
+      : new Api.InputPeerChannel({
+          channelId: BigInt(group.telegram_id),
+          accessHash: BigInt(group.access_hash),
+        });
+  const entity = await client.getEntity(peer);
+  if (!joinedGroup(entity))
+    throw Object.assign(
+      new Error("The account is not an active member of this group."),
+      { httpStatus: 403 },
+    );
+  return peer;
+}
+export async function sendGroup(group, body, imageUrl) {
+  const peer = await groupPeer(group);
+  let sent;
+  if (imageUrl) {
+    const url = await validatePublicImageUrl(imageUrl);
+    sent = await client.sendFile(peer, {
+      file: new Api.InputMediaPhotoExternal({ url }),
+      caption: body || "",
+      parseMode: false,
+    });
+  } else
+    sent = await client.sendMessage(peer, { message: body, parseMode: false });
+  await pool.query(
+    `INSERT INTO ${names.group_messages}(group_id,body,telegram_message_id,image_url) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+    [group.id, body || "", String(sent.id), imageUrl || null],
+  );
+  return { message_id: String(sent.id), media: imageUrl ? "photo" : "text" };
+}
+export async function groupHistory(
+  group,
+  { limit = 50, before_message_id } = {},
+) {
+  const peer = await groupPeer(group);
+  const batch = await client.getMessages(peer, {
+    limit,
+    offsetId: before_message_id || 0,
+  });
+  return {
+    group_id: group.id,
+    title: group.title,
+    messages: [...batch]
+      .reverse()
+      .map((m) => ({
+        message_id: String(m.id),
+        direction: m.out ? "out" : "in",
+        sender_id: m.senderId ? String(m.senderId) : null,
+        ...telegramMessageContent(m),
+        created_at: new Date(m.date * 1000).toISOString(),
+      })),
+    next_before_message_id: batch.length
+      ? Math.min(...batch.map((m) => m.id))
+      : null,
+    may_have_more: batch.length === limit,
+  };
 }

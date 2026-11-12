@@ -14,6 +14,8 @@ export const names = Object.fromEntries(
     "oauth",
     "audit",
     "deliveries",
+    "groups",
+    "group_messages",
   ].map((k) => [k, `"${k === "contacts" ? table : table + "_" + k}"`]),
 );
 export const configured = Boolean(
@@ -80,6 +82,12 @@ export async function migrate() {
     );
     await c.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS "${table}_username_idx" ON ${names.contacts}(lower(username)) WHERE username IS NOT NULL`,
+    );
+    await c.query(
+      `CREATE TABLE IF NOT EXISTS ${names.groups} (id SERIAL PRIMARY KEY,telegram_id TEXT NOT NULL,peer_type TEXT NOT NULL CHECK(peer_type IN ('chat','channel')),access_hash TEXT,title TEXT NOT NULL,username TEXT,updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(peer_type,telegram_id))`,
+    );
+    await c.query(
+      `CREATE TABLE IF NOT EXISTS ${names.group_messages} (id BIGSERIAL PRIMARY KEY,group_id INTEGER REFERENCES ${names.groups}(id),body TEXT NOT NULL,telegram_message_id TEXT NOT NULL,image_url TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(group_id,telegram_message_id))`,
     );
     await c.query("COMMIT");
   } catch (e) {

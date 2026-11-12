@@ -68,3 +68,11 @@ The canonical MCP origin is https://true.reserv-app.org on port 443 (MCP_ORIGIN)
 send_message accepts exactly one of phone, username, or contact_id. For username, use a public handle such as @example. resolve_recipient looks up a phone or username and saves the matched contact without sending. Username-only contacts have phone=null; the service does not invent a phone number or assume a supplied number belongs to a username. Usernames are resolved to Telegram user IDs before sending, so a reassigned handle is not silently sent to an old cached identity. Only personal accounts are supported through this route.
 
 Phone lookup uses Telegram's exact import mapping. An empty match does not prove the number is unregistered: privacy settings and account visibility can affect it. Explicit lookup deferrals are reported separately. The service now exposes 16 tools; refresh the ChatGPT plugin metadata after updating.
+
+## Group messaging
+
+The MCP server exposes 19 tools, including list_groups, get_group_history, and send_group_message. list_groups scans existing Telegram dialogs and returns only basic groups or supergroups that the account already belongs to. It never joins a group. Use the returned group_id (separate from contact IDs), and match the exact title before posting. To scan further pages, use next_offset_date while may_have_more is true.
+
+send_group_message supports text or a photo from a direct public HTTPS image_url. Telegram retrieves the remote image; the Relay server does not download arbitrary URLs into its filesystem. Local/private/reserved addresses, credentials in URLs, and non-HTTPS/nonstandard-port URLs are rejected. Actual image-format and posting permissions are enforced by Telegram. Text is limited to 4,000 characters; a photo caption to 1,024. Every send requires confirm_send=true and a unique request_id; retries must reuse that ID. Caption, image URL, and group ID are bound into the retry fingerprint.
+
+get_group_history reads recent messages without posting or marking them read. Group AI auto-replies are not enabled by these tools. Generic political satire is not generated or posted unless the user specifies the content and destination. Refresh the ChatGPT plugin metadata after deployment to discover the group tools.

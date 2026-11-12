@@ -6,6 +6,8 @@ export async function sendOnce({ request, claim, finish, loadContact, send }) {
       phone: request.phone || null,
       body: request.body,
       ...(request.username ? { username: request.username } : {}),
+      ...(request.group_id ? { group_id: request.group_id } : {}),
+      ...(request.image_url ? { image_url: request.image_url } : {}),
     }),
   );
   const existing = await claim(request.request_id, fingerprint);
@@ -30,7 +32,9 @@ export async function sendOnce({ request, claim, finish, loadContact, send }) {
     const output = {
       request_id: request.request_id,
       status: "sent",
-      contact_id: c.id,
+      ...(request.group_id
+        ? { group_id: c.id, title: c.title }
+        : { contact_id: c.id }),
       phone: c.phone,
       username: c.username || null,
       ...result,

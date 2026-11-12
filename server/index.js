@@ -19,6 +19,9 @@ import {
   syncConversation,
   resolveUsername,
   resolveContact,
+  listGroups,
+  sendGroup,
+  groupHistory,
 } from "./telegram.js";
 const app = express();
 const token = crypto.randomBytes(32).toString("hex");
@@ -267,6 +270,84 @@ app.post("/api/messages/send", async (req, res) => {
           [r.name || r.phone, r.phone],
         )
       ).rows[0];
+    },
+  });
+  res.json(result);
+});
+app.get("/api/groups", async (req, res) => {
+  const options = z
+    .object({
+      limit: z.coerce.number().int().min(1).max(500).default(100),
+      offset_date: z.coerce.number().int().positive().optional(),
+      search: z.string().max(200).optional(),
+    })
+    .parse(req.query);
+  res.json(await listGroups(options));
+});
+async function groupById(value) {
+  const g = (
+    await pool.query(`SELECT * FROM ${names.groups} WHERE id=$1`, [id(value)])
+  ).rows[0];
+  if (!g)
+    throw Object.assign(
+      new Error("Group not found. Find its group_id using list_groups first."),
+      { httpStatus: 404 },
+    );
+  return g;
+}
+app.get("/api/groups/:id/messages", async (req, res) =>
+  res.json(
+    await groupHistory(
+      await groupById(req.params.id),
+      z
+        .object({
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          before_message_id: z.coerce.number().int().positive().optional(),
+        })
+        .parse(req.query),
+    ),
+  ),
+);
+app.post("/api/groups/send", async (req, res) => {
+  const request = z
+    .object({
+      group_id: z.number().int().positive(),
+      request_id: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
+      body: z.string().trim().max(4000).default(""),
+      image_url: z.url().optional(),
+    })
+    .refine(
+      (r) => r.body.length > 0 || r.image_url,
+      "Provide text or an image URL",
+    )
+    .refine(
+      (r) => !r.image_url || r.body.length <= 1024,
+      "Photo captions must be at most 1024 characters",
+    )
+    .parse(req.body);
+  const result = await sendOnce({
+    request,
+    loadContact: () => groupById(request.group_id),
+    send: (g, text) => sendGroup(g, text, request.image_url),
+    claim: async (key, fingerprint) => {
+      const r = await pool.query(
+        `INSERT INTO ${names.deliveries}(request_id,fingerprint,status) VALUES($1,$2,'sending') ON CONFLICT DO NOTHING RETURNING request_id`,
+        [key, fingerprint],
+      );
+      return r.rowCount
+        ? null
+        : (
+            await pool.query(
+              `SELECT * FROM ${names.deliveries} WHERE request_id=$1`,
+              [key],
+            )
+          ).rows[0];
+    },
+    finish: async (key, state, result) => {
+      await pool.query(
+        `UPDATE ${names.deliveries} SET status=$1,result=$2 WHERE request_id=$3`,
+        [state, JSON.stringify(result), key],
+      );
     },
   });
   res.json(result);
