@@ -1,4 +1,7 @@
+import { sendOnce } from "./direct-messages.js";
 import express from "express";
+import { installAdminAuth, verifyAdminPassword } from "./admin-auth.js";
+import { createPgOAuthStore } from "./mcp.js";
 import { installMcp } from "./mcp.js";
 import { previewCampaign } from "./mcp-utils.js";
 import crypto from "node:crypto";
@@ -7,9 +10,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { contactSchema, campaignSchema } from "./validation.js";
 import { migrate, pool, names, settings } from "./db.js";
-import { connect, status, send, draft } from "./telegram.js";
+import { connect, status, send, draft, syncConversation } from "./telegram.js";
 const app = express();
 const token = crypto.randomBytes(32).toString("hex");
+const internalKey = crypto.randomBytes(32).toString("hex");
 let dbReady = false,
   dbError = null;
 app.use(express.json({ limit: "256kb" }));
@@ -39,6 +43,12 @@ app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
 });
+installAdminAuth(app, {
+  store: createPgOAuthStore(pool, names.oauth),
+  internalKey,
+  origin: process.env.PUBLIC_ORIGIN,
+  verify: verifyAdminPassword,
+});
 const mcp = installMcp(app, {
   pool,
   names,
@@ -46,7 +56,11 @@ const mcp = installMcp(app, {
   api: async (route, method = "GET", body) => {
     const response = await fetch("http://127.0.0.1:3001/api" + route, {
       method,
-      headers: { "Content-Type": "application/json", "X-Admin-Token": token },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Token": token,
+        "X-Relay-Internal": internalKey,
+      },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     const data = await response.json();
@@ -89,7 +103,7 @@ app.get("/api/contacts", async (req, res) =>
   res.json(
     (
       await pool.query(
-        `SELECT c.*, (SELECT body FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) last_message, (SELECT created_at FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) last_activity FROM ${names.contacts} c ORDER BY last_activity DESC NULLS LAST,c.id DESC`,
+        `SELECT c.*, (SELECT body FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) last_message, (SELECT created_at FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY m.id DESC LIMIT 1) last_activity FROM ${names.contacts} c ORDER BY last_activity DESC NULLS LAST,c.id DESC`,
       )
     ).rows,
   ),
@@ -128,20 +142,144 @@ app.post("/api/contacts/import", async (req, res) => {
 });
 app.patch("/api/contacts/:id", async (req, res) => {
   const v = z
-    .object({ ai_enabled: z.boolean(), opted_out: z.boolean() })
+    .object({
+      ai_enabled: z.boolean().optional(),
+      opted_out: z.boolean().optional(),
+      ai_instructions: z.string().max(12000).optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0)
     .parse(req.body);
-  const r = await pool.query(
-    `UPDATE ${names.contacts} SET ai_enabled=$1,opted_out=$2 WHERE id=$3 RETURNING *`,
-    [v.opted_out ? false : v.ai_enabled, v.opted_out, id(req.params.id)],
-  );
-  if (!r.rowCount) return res.status(404).json({ error: "Contact not found" });
-  res.json(r.rows[0]);
+  const c = await contact(req.params.id);
+  const next = { ...c, ...v };
+  if (next.opted_out) next.ai_enabled = false;
+  const row = (
+    await pool.query(
+      `UPDATE ${names.contacts} SET ai_enabled=$1,opted_out=$2,ai_instructions=$3 WHERE id=$4 RETURNING *`,
+      [next.ai_enabled, next.opted_out, next.ai_instructions, c.id],
+    )
+  ).rows[0];
+  res.json(row);
+});
+app.post("/api/messages/send", async (req, res) => {
+  const request = z
+    .object({
+      request_id: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
+      contact_id: z.number().int().positive().optional(),
+      phone: z.string().optional(),
+      name: z.string().trim().max(120).optional(),
+      body: z.string().trim().min(1).max(4000),
+    })
+    .refine(
+      (v) => Boolean(v.contact_id) !== Boolean(v.phone),
+      "Provide either contact_id or phone",
+    )
+    .parse(req.body);
+  if (request.phone)
+    request.phone = contactSchema.parse({
+      name: request.name || request.phone,
+      phone: request.phone,
+    }).phone;
+  if (!status().connected)
+    return res.status(409).json({ error: "Connect Telegram first" });
+  const result = await sendOnce({
+    request,
+    send,
+    claim: async (id, fingerprint) => {
+      const r = await pool.query(
+        `INSERT INTO ${names.deliveries}(request_id,fingerprint,status) VALUES($1,$2,'sending') ON CONFLICT DO NOTHING RETURNING request_id`,
+        [id, fingerprint],
+      );
+      if (r.rowCount) return null;
+      return (
+        await pool.query(
+          `SELECT * FROM ${names.deliveries} WHERE request_id=$1`,
+          [id],
+        )
+      ).rows[0];
+    },
+    finish: async (id, state, result) => {
+      await pool.query(
+        `UPDATE ${names.deliveries} SET status=$1,result=$2 WHERE request_id=$3`,
+        [state, JSON.stringify(result), id],
+      );
+    },
+    loadContact: async (r) => {
+      if (r.contact_id) return contact(r.contact_id);
+      const c = (
+        await pool.query(`SELECT * FROM ${names.contacts} WHERE phone=$1`, [
+          r.phone,
+        ])
+      ).rows[0];
+      if (c) return c;
+      return (
+        await pool.query(
+          `INSERT INTO ${names.contacts}(name,phone) VALUES($1,$2) ON CONFLICT(phone) DO UPDATE SET phone=EXCLUDED.phone RETURNING *`,
+          [r.name || r.phone, r.phone],
+        )
+      ).rows[0];
+    },
+  });
+  res.json(result);
+});
+app.get("/api/conversations", async (req, res) => {
+  const { limit, offset } = z
+    .object({
+      limit: z.coerce.number().int().min(1).max(100).default(30),
+      offset: z.coerce.number().int().min(0).default(0),
+    })
+    .parse(req.query);
+  const rows = (
+    await pool.query(
+      `SELECT c.id,c.name,c.phone,c.ai_enabled,c.ai_instructions,c.opted_out,(SELECT count(*)::int FROM ${names.messages} m WHERE m.contact_id=c.id) AS message_count,(SELECT body FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_message,(SELECT created_at FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_activity FROM ${names.contacts} c ORDER BY last_activity DESC NULLS LAST,c.id LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    )
+  ).rows;
+  res.json({
+    conversations: rows,
+    global_ai_enabled: (await settings()).enabled,
+  });
+});
+app.get("/api/conversations/:id", async (req, res) => {
+  const c = await contact(req.params.id);
+  const { limit, before_id } = z
+    .object({
+      limit: z.coerce.number().int().min(1).max(200).default(100),
+      before_id: z.string().regex(/^\d+$/).optional(),
+    })
+    .parse(req.query);
+  const rows = (
+    await pool.query(
+      `SELECT * FROM ${names.messages} WHERE contact_id=$1 AND ($2::bigint IS NULL OR (created_at,id)<(SELECT created_at,id FROM ${names.messages} WHERE id=$2 AND contact_id=$1)) ORDER BY created_at DESC,id DESC LIMIT $3`,
+      [c.id, before_id || null, limit + 1],
+    )
+  ).rows;
+  const has_more = rows.length > limit;
+  const messages = rows.slice(0, limit).reverse();
+  const master = (await settings()).enabled;
+  const { access_hash, ...safe } = c;
+  res.json({
+    contact: safe,
+    global_ai_enabled: master,
+    effective_ai_enabled: master && c.ai_enabled && !c.opted_out,
+    messages,
+    has_more,
+    next_before_id: has_more ? messages[0]?.id : null,
+  });
+});
+app.post("/api/conversations/:id/sync", async (req, res) => {
+  const options = z
+    .object({
+      limit: z.number().int().min(1).max(100).default(100),
+      before_message_id: z.number().int().positive().optional(),
+    })
+    .parse(req.body || {});
+  res.json(await syncConversation(await contact(req.params.id), options));
 });
 app.get("/api/contacts/:id/messages", async (req, res) =>
   res.json(
     (
       await pool.query(
-        `SELECT * FROM (SELECT * FROM ${names.messages} WHERE contact_id=$1 ORDER BY id DESC LIMIT 200) recent ORDER BY id`,
+        `SELECT * FROM (SELECT * FROM ${names.messages} WHERE contact_id=$1 ORDER BY created_at DESC,id DESC LIMIT 200) recent ORDER BY created_at,id`,
         [id(req.params.id)],
       )
     ).rows,
@@ -313,6 +451,14 @@ app.use(
     path.join(path.dirname(fileURLToPath(import.meta.url)), "../dist"),
   ),
 );
+app.get("/login", (req, res) =>
+  res.sendFile(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../dist/index.html",
+    ),
+  ),
+);
 app.use((err, req, res, next) => {
   const validation = err instanceof z.ZodError;
   const safe = validation
@@ -331,6 +477,9 @@ app.use((err, req, res, next) => {
 try {
   await migrate();
   dbReady = true;
+  await pool.query(
+    `UPDATE ${names.deliveries} SET status='uncertain' WHERE status='sending'`,
+  );
   await pool.query(
     `UPDATE ${names.campaigns} SET status='interrupted' WHERE status='sending'`,
   );

@@ -1,3 +1,4 @@
+import AuthGate from "./AuthGate.jsx";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -40,10 +41,13 @@ async function api(url, method = "GET", body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "Request failed");
+  if (!r.ok) {
+    if (r.status === 401) window.dispatchEvent(new Event("relay-auth-expired"));
+    throw new Error(data.error || "Request failed");
+  }
   return data;
 }
-function App() {
+function App({ onLogout }) {
   const [page, setPage] = useState("Overview"),
     [health, setHealth] = useState(null),
     [contacts, setContacts] = useState([]),
@@ -222,6 +226,9 @@ function App() {
             Workspace <span>/</span> <b>{page}</b>
           </div>
           <div className="header-right">
+            <Button size="xs" variant="subtle" color="gray" onClick={onLogout}>
+              Log out
+            </Button>
             <Badge
               variant="light"
               color={health?.telegram.connected ? "teal" : "gray"}
@@ -1292,6 +1299,6 @@ createRoot(document.getElementById("root")).render(
       components: { Button: { defaultProps: { fw: 600 } } },
     }}
   >
-    <App />
+    <AuthGate>{(logout) => <App onLogout={logout} />}</AuthGate>
   </MantineProvider>,
 );

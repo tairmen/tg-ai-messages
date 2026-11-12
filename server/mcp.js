@@ -42,10 +42,6 @@ export function installMcp(app, { pool, names, api, origin }) {
   const store = createPgOAuthStore(pool, names.oauth);
   const provider = createOAuthProvider({ store, origin });
   const resource = new URL(origin + "/mcp");
-  app.use((req, res, next) => {
-    res.locals.relayAdmin = req.headers["x-relay-admin"] === "admin";
-    next();
-  });
   app.post(
     "/authorize/decision",
     express.urlencoded({ extended: false, limit: "8kb" }),

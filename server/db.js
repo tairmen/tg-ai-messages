@@ -6,9 +6,15 @@ if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table) || table.length > 40)
     "POSTGRES_TABLE must be a simple SQL identifier, at most 40 characters",
   );
 export const names = Object.fromEntries(
-  ["contacts", "messages", "campaigns", "settings", "oauth", "audit"].map(
-    (k) => [k, `"${k === "contacts" ? table : table + "_" + k}"`],
-  ),
+  [
+    "contacts",
+    "messages",
+    "campaigns",
+    "settings",
+    "oauth",
+    "audit",
+    "deliveries",
+  ].map((k) => [k, `"${k === "contacts" ? table : table + "_" + k}"`]),
 );
 export const configured = Boolean(
   process.env.POSTGRES_HOST &&
@@ -56,6 +62,15 @@ export async function migrate() {
     );
     await c.query(
       `CREATE TABLE IF NOT EXISTS ${names.audit} (id BIGSERIAL PRIMARY KEY,client_id TEXT NOT NULL,tool TEXT NOT NULL,outcome TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    );
+    await c.query(
+      `ALTER TABLE ${names.contacts} ADD COLUMN IF NOT EXISTS ai_instructions TEXT NOT NULL DEFAULT ''`,
+    );
+    await c.query(
+      `CREATE TABLE IF NOT EXISTS ${names.deliveries} (request_id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,status TEXT NOT NULL,result JSONB,created_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+    );
+    await c.query(
+      `ALTER TABLE ${names.messages} ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'`,
     );
     await c.query("COMMIT");
   } catch (e) {

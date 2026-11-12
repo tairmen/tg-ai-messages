@@ -1,3 +1,4 @@
+import { telegramMessageContent } from "./message-content.js";
 import "dotenv/config";
 import fs from "node:fs/promises";
 import { TelegramClient, Api } from "teleproto";
@@ -58,7 +59,7 @@ export async function connect() {
         lastError =
           "Incoming message processing failed. Check database and API configuration.";
       }),
-    new NewMessage({ incoming: true }),
+    new NewMessage({}),
   );
   return status();
 }
@@ -77,7 +78,13 @@ export async function resolveContact(contact) {
     }),
   );
   const u = result.users.find((u) => !u.bot && !u.deleted);
-  if (!u) throw new Error("Number not discoverable on Telegram");
+  if (!u)
+    throw Object.assign(
+      new Error(
+        "Number not discoverable on Telegram. Their privacy settings may prevent phone lookup.",
+      ),
+      { httpStatus: 422 },
+    );
   return (
     await pool.query(
       `UPDATE ${names.contacts} SET telegram_id=$1,access_hash=$2 WHERE id=$3 RETURNING *`,
@@ -87,7 +94,10 @@ export async function resolveContact(contact) {
 }
 export async function send(contact, text, source = "manual") {
   if (!account) throw new Error("Connect your Telegram account first");
-  if (contact.opted_out) throw new Error("Contact has opted out");
+  if (contact.opted_out)
+    throw Object.assign(new Error("Contact has opted out"), {
+      httpStatus: 409,
+    });
   if (!contact.telegram_id || !contact.access_hash)
     contact = await resolveContact(contact);
   const peer = new Api.InputPeerUser({
@@ -102,13 +112,20 @@ export async function send(contact, text, source = "manual") {
     `INSERT INTO ${names.messages}(contact_id,direction,body,source,telegram_message_id) VALUES($1,'out',$2,$3,$4) ON CONFLICT DO NOTHING`,
     [contact.id, text, source, sent.id.toString()],
   );
+  return { message_id: sent.id.toString() };
 }
 export async function draft(contactId) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY missing");
   const s = await settings();
+  const specific = (
+    await pool.query(
+      `SELECT ai_instructions FROM ${names.contacts} WHERE id=$1`,
+      [contactId],
+    )
+  ).rows[0]?.ai_instructions;
   const history = (
     await pool.query(
-      `SELECT direction,body FROM ${names.messages} WHERE contact_id=$1 ORDER BY id DESC LIMIT 30`,
+      `SELECT direction,body FROM ${names.messages} WHERE contact_id=$1 ORDER BY created_at DESC,id DESC LIMIT 30`,
       [contactId],
     )
   ).rows.reverse();
@@ -120,7 +137,9 @@ export async function draft(contactId) {
   });
   const response = await ai.responses.create({
     model: s.model,
-    instructions: s.instructions,
+    instructions:
+      s.instructions +
+      (specific ? "\n\nConversation-specific instructions:\n" + specific : ""),
     input: history.map((m) => ({
       role: m.direction === "in" ? "user" : "assistant",
       content: m.body,
@@ -133,18 +152,25 @@ export async function draft(contactId) {
 }
 async function incoming(event) {
   const m = event.message;
-  if (!m.isPrivate || !m.message || !m.senderId) return;
+  const content = telegramMessageContent(m);
+  if (!m.isPrivate || !content.body || !m.chatId) return;
   let c = (
     await pool.query(`SELECT * FROM ${names.contacts} WHERE telegram_id=$1`, [
-      m.senderId.toString(),
+      m.chatId.toString(),
     ])
   ).rows[0];
   if (!c) return;
   const inserted = await pool.query(
-    `INSERT INTO ${names.messages}(contact_id,direction,body,source,telegram_message_id) VALUES($1,'in',$2,'telegram',$3) ON CONFLICT DO NOTHING RETURNING id`,
-    [c.id, m.message, m.id.toString()],
+    `INSERT INTO ${names.messages}(contact_id,direction,body,source,telegram_message_id,metadata) VALUES($1,$4,$2,'telegram',$3,$5) ON CONFLICT DO NOTHING RETURNING id`,
+    [
+      c.id,
+      content.body,
+      m.id.toString(),
+      m.out ? "out" : "in",
+      JSON.stringify(content.metadata),
+    ],
   );
-  if (!inserted.rowCount) return;
+  if (!inserted.rowCount || m.out || !m.message) return;
   if (/^(stop|unsubscribe|відписатися|стоп)$/i.test(m.message.trim())) {
     await pool.query(
       `UPDATE ${names.contacts} SET opted_out=true,ai_enabled=false WHERE id=$1`,
@@ -174,4 +200,50 @@ async function incoming(event) {
     busy.delete(c.id);
     waiting.delete(c.id);
   }
+}
+
+export async function syncConversation(
+  contact,
+  { limit = 100, before_message_id } = {},
+) {
+  if (!account)
+    throw Object.assign(new Error("Connect Telegram first"), {
+      httpStatus: 409,
+    });
+  if (!contact.telegram_id || !contact.access_hash)
+    contact = await resolveContact(contact);
+  const peer = new Api.InputPeerUser({
+    userId: BigInt(contact.telegram_id),
+    accessHash: BigInt(contact.access_hash),
+  });
+  const batch = await client.getMessages(peer, {
+    limit,
+    offsetId: before_message_id || 0,
+  });
+  const messages = [...batch]
+    .filter((m) => telegramMessageContent(m).body)
+    .reverse();
+  let imported = 0;
+  for (const m of messages) {
+    const r = await pool.query(
+      `INSERT INTO ${names.messages}(contact_id,direction,body,source,telegram_message_id,created_at,metadata) VALUES($1,$2,$3,'telegram',$4,$5,$6) ON CONFLICT DO NOTHING`,
+      [
+        contact.id,
+        m.out ? "out" : "in",
+        telegramMessageContent(m).body,
+        m.id.toString(),
+        new Date(m.date * 1000),
+        JSON.stringify(telegramMessageContent(m).metadata),
+      ],
+    );
+    imported += r.rowCount;
+  }
+  return {
+    imported,
+    fetched: batch.length,
+    next_before_message_id: batch.length
+      ? Math.min(...batch.map((m) => m.id))
+      : null,
+    may_have_more: batch.length === limit,
+  };
 }

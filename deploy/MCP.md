@@ -8,7 +8,7 @@ Authentication: OAuth (authorization-code flow, S256 PKCE, refresh tokens)
 
 Open https://chatgpt.com/plugins, select the plus button, then Add custom MCP server. Name it Relay Telegram, enter the server URL above, and choose OAuth. Review the warning and select Create as a plugin. Review the discovered tools, install the plugin, and select it with @ in a new chat. Account/workspace policies may restrict custom MCP connections; older interfaces may place this under Apps and Developer mode. Relay advertises OAuth metadata and dynamic client registration, so a client ID or secret normally does not need to be entered manually. Official instructions: https://developers.openai.com/plugins/deploy/connect-chatgpt
 
-When Relay opens its authorization page, sign in with the same admin username and password as the dashboard. Verify the callback shown belongs to the AI client you started connecting, review the requested permissions, and click Approve connection. Add the connected app to a chat. ChatGPT account/workspace settings control whether custom MCP connections are available; this server cannot enable that feature for your account.
+When Relay opens its authorization page, sign in on the Relay login page using the same admin username and password as the dashboard. Verify the callback shown belongs to the AI client you started connecting, review the requested permissions, and click Approve connection. Add the connected app to a chat. ChatGPT account/workspace settings control whether custom MCP connections are available; this server cannot enable that feature for your account.
 
 Example prompts:
 
@@ -33,7 +33,7 @@ Creating a campaign saves a draft only. Sending requires confirm_send=true and t
 ## OAuth operations
 
 - Discovery: /.well-known/oauth-authorization-server and /.well-known/oauth-protected-resource/mcp
-- Authorization / consent: /authorize and /authorize/decision (protected by Nginx admin login)
+- Authorization / consent: /authorize and /authorize/decision (protected by the admin session)
 - Token exchange / refresh: /token
 - Dynamic registration: /register
 - Revocation: /revoke
@@ -48,3 +48,13 @@ No OAuth endpoint grants workspace access without a signed-in admin approving co
 ## Deployment
 
 Pull main, install updated production dependencies with the pinned Node runtime, restart tg-ai-messages, and install deploy/nginx.conf after nginx -t passes. New OAuth and audit tables are created by the normal migration. The Nginx config forwards bearer tokens only on MCP/OAuth machine endpoints; the dashboard and human consent endpoints retain admin authentication.
+
+## Direct messages and conversation control
+
+The server now exposes 15 tools. Use send_message with either an international phone number or contact_id, the exact body, confirm_send=true, and a unique request_id. Reuse that request_id when retrying the same operation; use a new ID only for a new explicitly requested message. Telegram phone privacy and account restrictions still apply. A sent result means Telegram accepted the message, not that it was read. Uncertain delivery must be checked in the conversation before another send.
+
+Use list_conversations to find tracked customer chats; get_conversation returns chronological messages, settings, and a next_before_id cursor for older pages. Use sync_conversation to import older history from Telegram and page with next_before_message_id. Captions and media/service-message placeholders are stored, but attachments are not downloaded by MCP. Syncing does not trigger AI replies.
+
+set_contact_preferences accepts ai_enabled, ai_instructions, and/or opted_out. Conversation instructions supplement the global instructions; empty text clears the override. Both the global and conversation switches must be on for automatic replies.
+
+The frontend now has a login page and logout. OAuth authorization redirects to the same login page when needed. Existing OAuth connections remain valid; refresh the tool metadata in ChatGPT to discover the added tools.

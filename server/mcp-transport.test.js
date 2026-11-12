@@ -46,7 +46,7 @@ test("official MCP client discovers tools; scope checks and send schema prevent 
       ),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 12);
+    assert.equal(tools.tools.length, 15);
     assert.equal(
       tools.tools.find((t) => t.name === "send_campaign").annotations
         .destructiveHint,
