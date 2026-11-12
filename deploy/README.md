@@ -28,3 +28,7 @@ Runtime secrets: /opt/tg-ai-messages/.env and .data/telegram.session (not in Git
 - TLS certificate renewals use the existing Certbot setup.
 - The dashboard is HTTPS-only on 8443; use the domain, not the IP, so TLS verification succeeds.
 - To remove public access, remove the UFW 8443/tcp rule and disable only the tg-ai-messages Nginx site. Leave other applications untouched.
+
+## Telegram login on the droplet
+
+Create a fresh Telegram session directly on the droplet. Do not run a copied session simultaneously on hosts with different IPs: Telegram can invalidate it with AUTH_KEY_DUPLICATED. Stop tg-ai-messages, run the login command in a temporary interactive container with the application directory mounted read/write as UID 1000, then restart the production container. The production container retains its read-only mount.

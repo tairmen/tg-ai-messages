@@ -6,7 +6,7 @@ Authentication: OAuth (authorization-code flow, S256 PKCE, refresh tokens)
 
 ## Connect from ChatGPT
 
-Open ChatGPT's developer settings and enable Developer mode if available for your account/workspace. Open the custom app / MCP connection creation screen. Enter the server URL above and choose OAuth. Relay advertises OAuth metadata and dynamic client registration, so a client ID or secret normally does not need to be entered manually.
+Open https://chatgpt.com/plugins, select the plus button, then Add custom MCP server. Name it Relay Telegram, enter the server URL above, and choose OAuth. Review the warning and select Create as a plugin. Review the discovered tools, install the plugin, and select it with @ in a new chat. Account/workspace policies may restrict custom MCP connections; older interfaces may place this under Apps and Developer mode. Relay advertises OAuth metadata and dynamic client registration, so a client ID or secret normally does not need to be entered manually. Official instructions: https://developers.openai.com/plugins/deploy/connect-chatgpt
 
 When Relay opens its authorization page, sign in with the same admin username and password as the dashboard. Verify the callback shown belongs to the AI client you started connecting, review the requested permissions, and click Approve connection. Add the connected app to a chat. ChatGPT account/workspace settings control whether custom MCP connections are available; this server cannot enable that feature for your account.
 
