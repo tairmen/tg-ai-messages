@@ -16,7 +16,11 @@ app.use((req, res, next) => {
   if (!["localhost", "127.0.0.1"].includes(host))
     return res.status(403).json({ error: "Local access only" });
   const origin = req.headers.origin;
-  if (origin && !/^http:\/\/(localhost|127\.0\.0\.1):(3001|5173)$/.test(origin))
+  if (
+    origin &&
+    origin !== process.env.PUBLIC_ORIGIN &&
+    !/^http:\/\/(localhost|127\.0\.0\.1):(3001|5173)$/.test(origin)
+  )
     return res.status(403).json({ error: "Origin rejected" });
   res.setHeader("Cache-Control", "no-store");
   next();
