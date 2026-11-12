@@ -5,6 +5,7 @@ export async function sendOnce({ request, claim, finish, loadContact, send }) {
       contact_id: request.contact_id || null,
       phone: request.phone || null,
       body: request.body,
+      ...(request.username ? { username: request.username } : {}),
     }),
   );
   const existing = await claim(request.request_id, fingerprint);
@@ -31,6 +32,7 @@ export async function sendOnce({ request, claim, finish, loadContact, send }) {
       status: "sent",
       contact_id: c.id,
       phone: c.phone,
+      username: c.username || null,
       ...result,
     };
     await finish(request.request_id, "sent", output);

@@ -62,3 +62,9 @@ The frontend now has a login page and logout. OAuth authorization redirects to t
 ## Standard HTTPS MCP discovery
 
 The canonical MCP origin is https://true.reserv-app.org on port 443 (MCP_ORIGIN). The dashboard stays at https://true.reserv-app.org:8443 (PUBLIC_ORIGIN). Include deploy/mcp-443.nginx.conf only in the existing domain’s TLS server block to proxy MCP/OAuth routes. Other website paths remain on their existing application. Both root and /mcp-specific protected-resource discovery URLs are published. Existing port-8443 token audiences remain accepted only for this service. OAuth browser login redirects to the dashboard origin when needed; its cookie is shared on the same host.
+
+## Username recipients
+
+send_message accepts exactly one of phone, username, or contact_id. For username, use a public handle such as @example. resolve_recipient looks up a phone or username and saves the matched contact without sending. Username-only contacts have phone=null; the service does not invent a phone number or assume a supplied number belongs to a username. Usernames are resolved to Telegram user IDs before sending, so a reassigned handle is not silently sent to an old cached identity. Only personal accounts are supported through this route.
+
+Phone lookup uses Telegram's exact import mapping. An empty match does not prove the number is unregistered: privacy settings and account visibility can affect it. Explicit lookup deferrals are reported separately. The service now exposes 16 tools; refresh the ChatGPT plugin metadata after updating.

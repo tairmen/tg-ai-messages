@@ -1,3 +1,4 @@
+import { normalizeUsername } from "./recipients.js";
 import { sendOnce } from "./direct-messages.js";
 import express from "express";
 import { installAdminAuth, verifyAdminPassword } from "./admin-auth.js";
@@ -10,7 +11,15 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { contactSchema, campaignSchema } from "./validation.js";
 import { migrate, pool, names, settings } from "./db.js";
-import { connect, status, send, draft, syncConversation } from "./telegram.js";
+import {
+  connect,
+  status,
+  send,
+  draft,
+  syncConversation,
+  resolveUsername,
+  resolveContact,
+} from "./telegram.js";
 const app = express();
 const token = crypto.randomBytes(32).toString("hex");
 const internalKey = crypto.randomBytes(32).toString("hex");
@@ -163,20 +172,57 @@ app.patch("/api/contacts/:id", async (req, res) => {
   ).rows[0];
   res.json(row);
 });
+app.post("/api/recipients/resolve", async (req, res) => {
+  const target = z
+    .object({ username: z.string().optional(), phone: z.string().optional() })
+    .refine(
+      (v) => Boolean(v.username) !== Boolean(v.phone),
+      "Provide username or phone",
+    )
+    .parse(req.body);
+  let c;
+  if (target.username) c = await resolveUsername(target.username);
+  else {
+    const p = contactSchema.parse({
+      name: target.phone,
+      phone: target.phone,
+    }).phone;
+    c = (
+      await pool.query(`SELECT * FROM ${names.contacts} WHERE phone=$1`, [p])
+    ).rows[0];
+    if (!c)
+      c = (
+        await pool.query(
+          `INSERT INTO ${names.contacts}(name,phone) VALUES($1,$1) ON CONFLICT(phone) DO UPDATE SET phone=EXCLUDED.phone RETURNING *`,
+          [p],
+        )
+      ).rows[0];
+    c = await resolveContact(c);
+  }
+  res.json({
+    contact_id: c.id,
+    name: c.name,
+    username: c.username,
+    phone: c.phone,
+    matched_by: target.username ? "username" : "phone",
+  });
+});
 app.post("/api/messages/send", async (req, res) => {
   const request = z
     .object({
       request_id: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
       contact_id: z.number().int().positive().optional(),
       phone: z.string().optional(),
+      username: z.string().optional(),
       name: z.string().trim().max(120).optional(),
       body: z.string().trim().min(1).max(4000),
     })
     .refine(
-      (v) => Boolean(v.contact_id) !== Boolean(v.phone),
-      "Provide either contact_id or phone",
+      (v) => [v.contact_id, v.phone, v.username].filter(Boolean).length === 1,
+      "Provide exactly one of contact_id, phone, or username",
     )
     .parse(req.body);
+  if (request.username) request.username = normalizeUsername(request.username);
   if (request.phone)
     request.phone = contactSchema.parse({
       name: request.name || request.phone,
@@ -208,6 +254,7 @@ app.post("/api/messages/send", async (req, res) => {
     },
     loadContact: async (r) => {
       if (r.contact_id) return contact(r.contact_id);
+      if (r.username) return resolveUsername(r.username);
       const c = (
         await pool.query(`SELECT * FROM ${names.contacts} WHERE phone=$1`, [
           r.phone,

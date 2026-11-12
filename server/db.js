@@ -72,6 +72,15 @@ export async function migrate() {
     await c.query(
       `ALTER TABLE ${names.messages} ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'`,
     );
+    await c.query(
+      `ALTER TABLE ${names.contacts} ALTER COLUMN phone DROP NOT NULL`,
+    );
+    await c.query(
+      `ALTER TABLE ${names.contacts} ADD COLUMN IF NOT EXISTS username TEXT`,
+    );
+    await c.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "${table}_username_idx" ON ${names.contacts}(lower(username)) WHERE username IS NOT NULL`,
+    );
     await c.query("COMMIT");
   } catch (e) {
     await c.query("ROLLBACK");

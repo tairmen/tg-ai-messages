@@ -1,3 +1,4 @@
+import { normalizeUsername, importedUser } from "./recipients.js";
 import { telegramMessageContent } from "./message-content.js";
 import "dotenv/config";
 import fs from "node:fs/promises";
@@ -77,11 +78,11 @@ export async function resolveContact(contact) {
       ],
     }),
   );
-  const u = result.users.find((u) => !u.bot && !u.deleted);
+  const u = importedUser(result, contact.id);
   if (!u)
     throw Object.assign(
       new Error(
-        "Number not discoverable on Telegram. Their privacy settings may prevent phone lookup.",
+        "Telegram did not resolve this phone number. It may be hidden by privacy settings, not registered, or unavailable to this account. Use a username or ask the person to message this account first.",
       ),
       { httpStatus: 422 },
     );
@@ -246,4 +247,81 @@ export async function syncConversation(
       : null,
     may_have_more: batch.length === limit,
   };
+}
+
+export async function resolveUsername(value) {
+  if (!account)
+    throw Object.assign(new Error("Connect Telegram first"), {
+      httpStatus: 409,
+    });
+  const username = normalizeUsername(value);
+  const resolved = await client.invoke(
+    new Api.contacts.ResolveUsername({ username }),
+  );
+  const user =
+    resolved.peer instanceof Api.PeerUser
+      ? resolved.users.find(
+          (u) =>
+            String(u.id) === String(resolved.peer.userId) &&
+            !u.deleted &&
+            !u.bot,
+        )
+      : null;
+  if (!user || !user.accessHash)
+    throw Object.assign(
+      new Error(
+        "This username does not resolve to a supported personal Telegram account.",
+      ),
+      { httpStatus: 422 },
+    );
+  const id = String(user.id),
+    accessHash = String(user.accessHash);
+  const visiblePhone = user.phone
+    ? "+" + String(user.phone).replace(/^\+/, "")
+    : null;
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      "relay-username:" + username,
+    ]);
+    await db.query(
+      `UPDATE ${names.contacts} SET username=NULL WHERE lower(username)=$1 AND telegram_id IS DISTINCT FROM $2`,
+      [username, id],
+    );
+    const existing = (
+      await db.query(
+        `SELECT * FROM ${names.contacts} WHERE telegram_id=$1 OR (phone=$2 AND telegram_id IS NULL) ORDER BY (telegram_id=$1) DESC NULLS LAST,id LIMIT 1 FOR UPDATE`,
+        [id, visiblePhone],
+      )
+    ).rows[0];
+    let contact;
+    if (existing)
+      contact = (
+        await db.query(
+          `UPDATE ${names.contacts} SET username=$1,telegram_id=$2,access_hash=$3 WHERE id=$4 RETURNING *`,
+          [username, id, accessHash, existing.id],
+        )
+      ).rows[0];
+    else
+      contact = (
+        await db.query(
+          `INSERT INTO ${names.contacts}(name,phone,username,telegram_id,access_hash) VALUES($1,NULL,$2,$3,$4) RETURNING *`,
+          [
+            [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+              "@" + username,
+            username,
+            id,
+            accessHash,
+          ],
+        )
+      ).rows[0];
+    await db.query("COMMIT");
+    return contact;
+  } catch (e) {
+    await db.query("ROLLBACK");
+    throw e;
+  } finally {
+    db.release();
+  }
 }
