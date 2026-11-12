@@ -19,7 +19,7 @@ export function makeClient(session = "") {
   const { id, hash } = credentials();
   return new TelegramClient(new StringSession(session), id, hash, {
     connectionRetries: 3,
-    requestRetries: 0,
+    requestRetries: 3,
     floodSleepThreshold: 0,
   });
 }
