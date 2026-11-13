@@ -1,3 +1,4 @@
+import { aiSettingsUpdate } from "./ai-settings-sql.js";
 import { aiPreferences } from "./ai-policy.js";
 import { normalizeUsername } from "./recipients.js";
 import { sendOnce } from "./direct-messages.js";
@@ -168,19 +169,8 @@ app.patch("/api/contacts/:id", async (req, res) => {
   const c = await contact(req.params.id);
   const next = { ...c, ...v };
   if (next.opted_out) next.ai_enabled = false;
-  const row = (
-    await pool.query(
-      `UPDATE ${names.contacts} SET ai_enabled=$1,opted_out=$2,ai_instructions=$3,ai_mode=$5,ai_interval_minutes=$6,ai_revision=ai_revision+1,ai_next_run_at=now()+$6*interval '1 minute' WHERE id=$4 RETURNING *`,
-      [
-        next.ai_enabled,
-        next.opted_out,
-        next.ai_instructions,
-        c.id,
-        next.ai_mode,
-        next.ai_interval_minutes,
-      ],
-    )
-  ).rows[0];
+  const row = (await pool.query(aiSettingsUpdate(names, "contact", next)))
+    .rows[0];
   res.json(row);
 });
 app.post("/api/recipients/resolve", async (req, res) => {
@@ -316,17 +306,7 @@ app.patch("/api/groups/:id", async (req, res) => {
   const group = await groupById(req.params.id);
   const next = { ...group, ...patch };
   const { access_hash, ...safe } = (
-    await pool.query(
-      `UPDATE ${names.groups} SET ai_enabled=$1,ai_instructions=$2,ai_mode=$3,
-    ai_interval_minutes=$4,ai_revision=ai_revision+1,ai_next_run_at=now()+$4*interval '1 minute' WHERE id=$5 RETURNING *`,
-      [
-        next.ai_enabled,
-        next.ai_instructions,
-        next.ai_mode,
-        next.ai_interval_minutes,
-        group.id,
-      ],
-    )
+    await pool.query(aiSettingsUpdate(names, "group", next))
   ).rows[0];
   res.json(safe);
 });
