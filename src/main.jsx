@@ -1,3 +1,4 @@
+import AiConversationSettings from "./AiConversationSettings.jsx";
 import AuthGate from "./AuthGate.jsx";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -53,6 +54,7 @@ function App({ onLogout }) {
     [contacts, setContacts] = useState([]),
     [campaigns, setCampaigns] = useState([]),
     [config, setConfig] = useState(null),
+    [savedMasterEnabled, setSavedMasterEnabled] = useState(false),
     [mcpConnections, setMcpConnections] = useState([]),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -84,6 +86,7 @@ function App({ onLogout }) {
       setContacts(c);
       setCampaigns(k);
       setConfig((prev) => prev || s);
+      setSavedMasterEnabled(s.enabled);
     }
   }
   useEffect(() => {
@@ -978,7 +981,7 @@ function App({ onLogout }) {
                         <div>
                           <strong>Automatic replies</strong>
                           <small>
-                            Only for contacts with AI replies enabled.
+                            Only for contacts and groups with AI enabled.
                           </small>
                         </div>
                         <Switch
@@ -1018,7 +1021,7 @@ function App({ onLogout }) {
                     <h2>You set the boundaries.</h2>
                     <p className="muted">
                       Automatic replies require both the master switch here and
-                      the AI switch on each contact.
+                      the AI switch on each contact or group.
                     </p>
                     {[
                       [
@@ -1052,6 +1055,12 @@ function App({ onLogout }) {
                   </p>
                 </div>
               </div>
+              <AiConversationSettings
+                api={api}
+                contacts={contacts}
+                refreshContacts={refresh}
+                masterEnabled={savedMasterEnabled}
+              />
             </>
           )}
           {page === "Settings" && (

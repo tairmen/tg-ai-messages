@@ -1,3 +1,4 @@
+import { aiPreferences } from "./ai-policy.js";
 import { normalizeUsername } from "./recipients.js";
 import { sendOnce } from "./direct-messages.js";
 import express from "express";
@@ -22,6 +23,7 @@ import {
   listGroups,
   sendGroup,
   groupHistory,
+  startAiScheduler,
 } from "./telegram.js";
 const app = express();
 const token = crypto.randomBytes(32).toString("hex");
@@ -158,9 +160,8 @@ app.post("/api/contacts/import", async (req, res) => {
 app.patch("/api/contacts/:id", async (req, res) => {
   const v = z
     .object({
-      ai_enabled: z.boolean().optional(),
+      ...aiPreferences,
       opted_out: z.boolean().optional(),
-      ai_instructions: z.string().max(12000).optional(),
     })
     .refine((v) => Object.keys(v).length > 0)
     .parse(req.body);
@@ -169,8 +170,15 @@ app.patch("/api/contacts/:id", async (req, res) => {
   if (next.opted_out) next.ai_enabled = false;
   const row = (
     await pool.query(
-      `UPDATE ${names.contacts} SET ai_enabled=$1,opted_out=$2,ai_instructions=$3 WHERE id=$4 RETURNING *`,
-      [next.ai_enabled, next.opted_out, next.ai_instructions, c.id],
+      `UPDATE ${names.contacts} SET ai_enabled=$1,opted_out=$2,ai_instructions=$3,ai_mode=$5,ai_interval_minutes=$6,ai_revision=ai_revision+1,ai_next_run_at=now()+$6*interval '1 minute' WHERE id=$4 RETURNING *`,
+      [
+        next.ai_enabled,
+        next.opted_out,
+        next.ai_instructions,
+        c.id,
+        next.ai_mode,
+        next.ai_interval_minutes,
+      ],
     )
   ).rows[0];
   res.json(row);
@@ -295,6 +303,33 @@ async function groupById(value) {
     );
   return g;
 }
+app.get("/api/groups/:id/ai", async (req, res) => {
+  const { access_hash, ...group } = await groupById(req.params.id);
+  res.json({ group, global_ai_enabled: (await settings()).enabled });
+});
+app.patch("/api/groups/:id", async (req, res) => {
+  const patch = z
+    .object(aiPreferences)
+    .strict()
+    .refine((v) => Object.keys(v).length > 0)
+    .parse(req.body);
+  const group = await groupById(req.params.id);
+  const next = { ...group, ...patch };
+  const { access_hash, ...safe } = (
+    await pool.query(
+      `UPDATE ${names.groups} SET ai_enabled=$1,ai_instructions=$2,ai_mode=$3,
+    ai_interval_minutes=$4,ai_revision=ai_revision+1,ai_next_run_at=now()+$4*interval '1 minute' WHERE id=$5 RETURNING *`,
+      [
+        next.ai_enabled,
+        next.ai_instructions,
+        next.ai_mode,
+        next.ai_interval_minutes,
+        group.id,
+      ],
+    )
+  ).rows[0];
+  res.json(safe);
+});
 app.get("/api/groups/:id/messages", async (req, res) =>
   res.json(
     await groupHistory(
@@ -361,7 +396,7 @@ app.get("/api/conversations", async (req, res) => {
     .parse(req.query);
   const rows = (
     await pool.query(
-      `SELECT c.id,c.name,c.phone,c.ai_enabled,c.ai_instructions,c.opted_out,(SELECT count(*)::int FROM ${names.messages} m WHERE m.contact_id=c.id) AS message_count,(SELECT body FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_message,(SELECT created_at FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_activity FROM ${names.contacts} c ORDER BY last_activity DESC NULLS LAST,c.id LIMIT $1 OFFSET $2`,
+      `SELECT c.id,c.name,c.phone,c.ai_enabled,c.ai_instructions,c.ai_mode,c.ai_interval_minutes,c.ai_next_run_at,c.ai_last_run_at,c.ai_last_result,c.opted_out,(SELECT count(*)::int FROM ${names.messages} m WHERE m.contact_id=c.id) AS message_count,(SELECT body FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_message,(SELECT created_at FROM ${names.messages} m WHERE m.contact_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) AS last_activity FROM ${names.contacts} c ORDER BY last_activity DESC NULLS LAST,c.id LIMIT $1 OFFSET $2`,
       [limit, offset],
     )
   ).rows;
@@ -622,6 +657,7 @@ if (dbReady)
   await connect().catch(() =>
     console.error("Telegram not connected. Run npm run telegram:login."),
   );
+if (dbReady) startAiScheduler();
 app.listen(3001, "127.0.0.1", () =>
   console.log("Relay API: http://127.0.0.1:3001"),
 );

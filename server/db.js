@@ -89,6 +89,20 @@ export async function migrate() {
     await c.query(
       `CREATE TABLE IF NOT EXISTS ${names.group_messages} (id BIGSERIAL PRIMARY KEY,group_id INTEGER REFERENCES ${names.groups}(id),body TEXT NOT NULL,telegram_message_id TEXT NOT NULL,image_url TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),UNIQUE(group_id,telegram_message_id))`,
     );
+    await c.query(`ALTER TABLE ${names.group_messages}
+      ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'out',
+      ADD COLUMN IF NOT EXISTS sender_id TEXT`);
+    for (const target of [names.contacts, names.groups]) {
+      await c.query(`ALTER TABLE ${target}
+        ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS ai_instructions TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS ai_mode TEXT NOT NULL DEFAULT 'immediate' CHECK (ai_mode IN ('immediate','scheduled')),
+        ADD COLUMN IF NOT EXISTS ai_interval_minutes INTEGER NOT NULL DEFAULT 1 CHECK (ai_interval_minutes BETWEEN 1 AND 10080),
+        ADD COLUMN IF NOT EXISTS ai_next_run_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS ai_last_run_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS ai_last_result JSONB,
+        ADD COLUMN IF NOT EXISTS ai_revision INTEGER NOT NULL DEFAULT 0`);
+    }
     await c.query("COMMIT");
   } catch (e) {
     await c.query("ROLLBACK");
